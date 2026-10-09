@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+body { width: 294px; margin: 0; padding: 22px; background: #12151c; color: #f5f6fa; }
+.eyebrow { font-size: 10px; letter-spacing: 2px; color: #86d8ed; }
+h1 { font-size: 21px; font-weight: 650; margin: 12px 0; }
+p { font-size: 13px; line-height: 1.7; color: #bfc6d3; }
+button { width: 100%; margin: 8px 0; border: 0; border-radius: 9px; padding: 12px;
+  background: #86d8ed; color: #092a33; font: inherit; font-weight: 600; cursor: pointer; }
+button:focus-visible { outline: 3px solid white; outline-offset: 3px; }
+footer { border-top: 1px solid #303541; padding-top: 12px; font-size: 11px; line-height: 1.7; color: #8e99ab; }

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN" class="site-theme"><head><meta charset="utf-8">
+<title>直播弹幕测试房间</title>
+<style>
+html,body { margin:0; background:#132233; color:white; font-family:Arial,sans-serif; }
+.live-room { --danmaku-opacity:.62; --danmaku-size:26px; margin:30px; }
+.player-section { width:960px; height:540px; }
+#live-player-ctnr { position:relative; width:100%; height:100%; background:#000; }
+#live-player { height:100%; }
+video { width:100%; height:100%; }
+.danmaku { position:absolute; inset:0 0 50%; pointer-events:none; overflow:hidden; }
+.live-room .player-section[data-v-room] .danmaku span {
+  font-size:var(--danmaku-size); font-family:"Microsoft YaHei",sans-serif;
+  opacity:var(--danmaku-opacity); color:rgb(255,210,90); font-weight:700;
+  text-shadow:1px 1px 2px #000; white-space:nowrap; display:block;
+}
+.controls { position:absolute; bottom:0; background:#173f5e; padding:10px; }
+button { cursor:pointer; }
+</style></head><body>
+<main class="live-room"><section class="player-section" data-v-room>
+<div id="live-player-ctnr"><div id="live-player">
+<video autoplay muted playsinline></video>
+<div class="danmaku"><span id="original-danmaku">原弹幕 · 字体、透明度、描边保持一致</span></div>
+<div class="controls">
+<button id="mute">静音切换</button><button id="pause">播放暂停</button>
+<button id="style">调整弹幕样式</button><button id="cssom">调整样式表</button>
+</div></div></div>
+</section></main>
+<script>
+const video = document.querySelector('video');
+const canvas = document.createElement('canvas');
+canvas.width=960; canvas.height=540;
+const ctx = canvas.getContext('2d');
+let frame=0;
+setInterval(() => {
+  frame++;
+  ctx.fillStyle='#182d45';ctx.fillRect(0,0,960,540);
+  ctx.fillStyle='#4176a4';ctx.fillRect(frame%850,200,110,110);
+  ctx.fillStyle='#fff';ctx.font='28px sans-serif';ctx.fillText('LIVE · '+frame,32,500);
+},50);
+video.srcObject = canvas.captureStream(20);
+video.play();
+window.fixture = {
+  root:document.querySelector('#live-player-ctnr'), video,
+  danmaku:document.querySelector('#original-danmaku'),
+  addDanmaku() {
+    const span=document.createElement('span');
+    span.textContent='新弹幕仍由原播放器生成';
+    this.root.querySelector('.danmaku').append(span);
+  }
+};
+document.querySelector('#mute').onclick=()=>{video.muted=!video.muted;};
+document.querySelector('#pause').onclick=()=>{video.paused?video.play():video.pause();};
+document.querySelector('#style').onclick=()=>{
+  fixture.root.style.setProperty('--danmaku-size','32px');
+  fixture.root.style.setProperty('--danmaku-opacity','.8');
+};
+document.querySelector('#cssom').onclick=()=>{
+  document.styleSheets[0].insertRule('.danmaku span { letter-spacing: 3px; }',document.styleSheets[0].cssRules.length);
+};
+</script></body></html>
