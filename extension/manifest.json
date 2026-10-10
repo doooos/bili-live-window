@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "B站直播原生小窗",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "将 B 站直播原播放器移入置顶小窗，保留画面弹幕和原播放器控件。",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab"],

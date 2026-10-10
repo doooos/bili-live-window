@@ -6,7 +6,7 @@
 
 ## 安装
 
-1. 解压 `bili-live-window-v0.1.0.zip`。
+1. 解压 `bili-live-window-v0.1.1.zip`。
 2. 在 Edge 地址栏打开 `edge://extensions`。
 3. 打开“开发人员模式”。
 4. 点“加载解压缩的扩展”。
@@ -14,6 +14,8 @@
 6. 刷新已经打开的 B 站直播页。
 
 选择的文件夹内应直接有 `manifest.json`。
+
+从旧版升级时，可将新版 `extension` 内的文件覆盖到原扩展目录，再在 `edge://extensions` 点该扩展的重新加载按钮。之后刷新直播页。
 
 ## 使用
 
@@ -29,7 +31,8 @@
 
 ## 弹幕与原播放器
 
-- 使用同一个视频、弹幕层和播放器控件，不重新连接弹幕服务。
+- 保留原弹幕层和播放器控件，不重新连接弹幕服务。
+- 普通直播页移动原视频。内嵌播放器的赛事页保留原视频和声音，在小窗显示本地视频镜像，并带上原弹幕层和控件。
 - 不重写弹幕字体、字号、颜色、透明度、描边和屏蔽设置。
 - 复制页面样式，保留播放器节点及其内部样式。
 - 小窗尺寸变化时，B 站可能按自身规则调整字号和弹幕布局。相同设置不代表不同窗口尺寸下的像素完全相同。
@@ -45,6 +48,8 @@
 - 本地受控页面通过 11 项检查，覆盖原节点保留、样式保留、样式修改、持续播放、暂停状态和反复开关。
 
 尚未在你的 Edge 用户配置中验证全部个人设置。B 站后续修改播放器，也可能影响兼容性。
+
+2026-10-10，0.1.1 新增赛事内嵌播放器和 `/blanc/` 页面支持。普通页 11 项、内嵌页 9 项受控检查通过，覆盖新增弹幕、原控件和样式同步。真实赛事房间 `7902350` 已验证小窗持续播放、原弹幕层保留和关闭恢复；这次短时观察没有新弹幕到达，未据此宣称该赛事的新弹幕已实测通过。
 
 自动测试中新标签页没有使原页报告“隐藏”，所以尚未证明最小化 Edge 后的长期弹幕刷新。
 
@@ -64,7 +69,7 @@
 
 ## 技术说明
 
-Manifest V3，无构建依赖。使用浏览器的 Document Picture-in-Picture API，将原播放器 DOM 移到新文档，并在关闭时恢复。
+Manifest V3，无构建依赖。使用浏览器的 Document Picture-in-Picture API，将原播放器 DOM 移到新文档，并在关闭时恢复。赛事页的源视频留在原 iframe，使用 `captureStream()` 的视频轨道显示画面；镜像静音，声音仍由源视频播放。没有录制或上传视频。
 
 API 说明：https://developer.chrome.com/docs/web-platform/document-picture-in-picture
 
@@ -76,12 +81,14 @@ API 说明：https://developer.chrome.com/docs/web-platform/document-picture-in-
 npm install --no-save playwright
 npx playwright install chromium
 node tools/test.cjs
+node tools/test-frames.cjs
 ```
 
 真实直播检查单独运行，会访问所选公开直播间：
 
 ```sh
 node tools/inspect-live.cjs https://live.bilibili.com/5050
+node tools/verify-room.cjs
 ```
 
 测试结果写入 `test-results/`，该目录不提交到仓库。测试使用独立浏览器配置，不使用个人登录信息。

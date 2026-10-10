@@ -44,28 +44,64 @@
   }
 
   function findPlayer() {
-    const candidates = [...document.querySelectorAll('video')].filter(video => {
+    // Esports pages wrap the real /blanc/<room> player in a same-origin iframe.
+    // Keep the iframe loaded: only move its player, never the iframe itself.
+    const documents = [];
+    function visit(doc, frames = []) {
+      if (documents.length >= 16) return;
+      documents.push({ doc, frames });
+      if (frames.length >= 4) return;
+      for (const frame of doc.querySelectorAll('iframe')) {
+        const rect = frame.getBoundingClientRect();
+        if (rect.width < 150 || rect.height < 80) continue;
+        try {
+          const child = frame.contentDocument;
+          if (child?.location.origin === location.origin) {
+            visit(child, [...frames, { frame, doc: child }]);
+          }
+        } catch { /* Cross-origin frames cannot supply a movable native player. */ }
+      }
+    }
+    visit(document);
+    const candidates = documents.flatMap(({ doc, frames }) =>
+      [...doc.querySelectorAll('video')].map(video => ({ video, doc, frames }))
+    ).filter(({ video }) => {
       const rect = video.getBoundingClientRect();
       return rect.width >= 150 && rect.height >= 80;
     }).sort((a, b) => {
-      const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+      const x = a.video.getBoundingClientRect(), y = b.video.getBoundingClientRect();
       return y.width * y.height - x.width * x.height;
     });
-    for (const video of candidates) {
-      // Move the live mount, including danmaku and controls, never clone the video.
+    for (const { video, doc, frames } of candidates) {
+      // Move the live mount, including the original danmaku and controls.
       const root = video.closest('#live-player-ctnr')
         || video.closest('#live-player')
         || video.closest('.bilibili-live-player')
         || video.closest('.web-player');
-      if (root && root !== document.body) return { root, video };
+      if (root && root !== doc.body) {
+        return { root, video, sourceDocument: doc, sourceWindow: doc.defaultView, frames };
+      }
     }
     return null;
+  }
+
+  function sourceAvailable(state) {
+    if (state.ownerGone) return false;
+    try {
+      return state.frames.every(({ frame, doc }) => frame.isConnected && frame.contentDocument === doc);
+    } catch { return false; }
+  }
+
+  function resizeSource(state) {
+    if (sourceAvailable(state)) {
+      state.sourceWindow.dispatchEvent(new state.sourceWindow.Event('resize'));
+    }
   }
 
   function refreshLayout(state) {
     if (active !== state) return;
     // Bilibili's player still has its original Window listeners.
-    window.dispatchEvent(new Event('resize'));
+    resizeSource(state);
     state.pip.dispatchEvent(new state.pip.Event('resize'));
   }
 
@@ -73,7 +109,7 @@
     if (active !== state || state.pip.closed) return;
     const doc = state.pip.document;
     const fragment = doc.createDocumentFragment();
-    for (const source of document.querySelectorAll('style,link[rel~="stylesheet"]')) {
+    for (const source of state.sourceDocument.querySelectorAll('style,link[rel~="stylesheet"]')) {
       if (state.root.contains(source)) continue;
       let copy;
       if (source.tagName === 'LINK') {
@@ -96,7 +132,7 @@
       copy.dataset.blwCopied = '';
       fragment.append(copy);
     }
-    for (const sheet of document.adoptedStyleSheets || []) {
+    for (const sheet of state.sourceDocument.adoptedStyleSheets || []) {
       const copy = doc.createElement('style');
       try { copy.textContent = [...sheet.cssRules].map(rule => rule.cssText).join('\n'); }
       catch { continue; }
@@ -116,15 +152,37 @@
     clearTimeout(state.styleTimer);
     clearInterval(state.watchdog);
     window.removeEventListener('pagehide', state.onOwnerHide);
+    state.sourceWindow.removeEventListener('pagehide', state.onOwnerHide);
     const { root, marker, parent, next, pip } = state;
     // The source may have navigated to another live room while the window was open.
     // Do not append an old stream into the new room.
     const resume = !state.video.paused;
-    if (marker.isConnected) marker.replaceWith(root);
-    else if (parent.isConnected) parent.insertBefore(root, next?.parentNode === parent ? next : null);
+    // Adoption back into an iframe can re-trigger HTML autoplay even when the
+    // viewer paused in PiP. Preserve that pause until playback is requested.
+    if (!resume && state.video.autoplay) {
+      state.video.autoplay = false;
+      state.video.addEventListener('play', () => { state.video.autoplay = true; }, { once: true });
+    }
+    if (sourceAvailable(state) && marker.isConnected) marker.replaceWith(root);
+    else if (sourceAvailable(state) && parent.isConnected) {
+      parent.insertBefore(root, next?.parentNode === parent ? next : null);
+    }
     else {
       root.querySelectorAll('video').forEach(video => video.pause());
       root.remove();
+    }
+    if (state.mirror) {
+      const { preview, stream, style } = state.mirror;
+      if (root.ownerDocument === state.sourceDocument && root.isConnected) {
+        preview.replaceWith(state.video);
+      } else {
+        state.video.pause();
+        state.video.remove();
+      }
+      if (style === null) state.video.removeAttribute('style');
+      else state.video.setAttribute('style', style);
+      preview.srcObject = null;
+      stream.getTracks().forEach(track => track.stop());
     }
     if (state.previousAttribute === null) root.removeAttribute('data-blw-player');
     else root.setAttribute('data-blw-player', state.previousAttribute);
@@ -132,8 +190,8 @@
     label.textContent = '直播小窗';
     entry.disabled = false;
     if (!pip.closed) pip.close();
-    window.dispatchEvent(new Event('resize'));
-    if (root.ownerDocument === document && root.isConnected && resume && state.video.paused) {
+    resizeSource(state);
+    if (root.ownerDocument === state.sourceDocument && root.isConnected && resume && state.video.paused) {
       state.video.play().catch(() => {});
     }
   }
@@ -142,7 +200,7 @@
     // Scoped site CSS may depend on parent classes or Vue's data-v-* attributes.
     // These are empty layout shells. The real player/danmaku nodes remain intact.
     const ancestors = [];
-    for (let node = state.root.parentElement; node && node !== document.body; node = node.parentElement) {
+    for (let node = state.root.parentElement; node && node !== state.sourceDocument.body; node = node.parentElement) {
       ancestors.unshift(node);
     }
     let parent = stage;
@@ -170,14 +228,14 @@
   }
 
   function setupWindow(state) {
-    const { pip, root } = state;
+    const { pip, root, sourceDocument, sourceWindow } = state;
     const doc = pip.document;
     doc.title = `直播小窗 · ${document.title}`;
     doc.documentElement.lang = 'zh-CN';
-    doc.documentElement.className = document.documentElement.className;
-    doc.body.className = document.body.className;
+    doc.documentElement.className = sourceDocument.documentElement.className;
+    doc.body.className = sourceDocument.body.className;
     // Preserve inherited site variables even after leaving the original ancestors.
-    const inherited = getComputedStyle(root);
+    const inherited = sourceWindow.getComputedStyle(root);
     for (const property of ['font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
       'color', 'letter-spacing', 'text-shadow', 'direction']) {
       doc.body.style.setProperty(property, inherited.getPropertyValue(property));
@@ -186,7 +244,7 @@
       if (property.startsWith('--')) doc.body.style.setProperty(property, inherited.getPropertyValue(property));
     }
     const base = doc.createElement('base');
-    base.href = document.baseURI;
+    base.href = sourceDocument.baseURI;
     doc.head.append(base);
     state.override = doc.createElement('style');
     state.override.textContent = `
@@ -238,10 +296,10 @@
     doc.body.append(layout);
     const mount = preserveAncestors(state, stage);
     const rect = root.getBoundingClientRect();
-    const marker = document.createElement('div');
+    const marker = sourceDocument.createElement('div');
     marker.id = 'blw-placeholder';
     marker.style.cssText = `box-sizing:border-box;width:100%;height:${Math.max(rect.height, 180)}px;display:flex;align-items:center;justify-content:center;background:#101722;color:#dce5ef;font:14px sans-serif;`;
-    const bringBack = document.createElement('button');
+    const bringBack = sourceDocument.createElement('button');
     bringBack.type = 'button';
     bringBack.textContent = '直播正在小窗播放 · 点此放回网页';
     bringBack.style.cssText = 'cursor:pointer;border:1px solid #7293ab;border-radius:8px;padding:14px;background:#192b3c;color:#fff;';
@@ -249,31 +307,62 @@
     marker.append(bringBack);
     state.marker = marker;
     root.before(marker);
+    if (sourceWindow !== window) {
+      // Chromium can detach an iframe's MediaSource when its video is adopted
+      // by a PiP owned by the top window. Keep that video and its audio in the
+      // original document; mirror only its local video track behind native UI.
+      const stream = state.video.captureStream();
+      const audioTracks = stream.getAudioTracks();
+      audioTracks.forEach(track => { stream.removeTrack(track); track.stop(); });
+      if (!stream.getVideoTracks().length) {
+        stream.getTracks().forEach(track => track.stop());
+        throw new Error('No video track available');
+      }
+      const preview = state.video.cloneNode(false);
+      preview.removeAttribute('src');
+      preview.removeAttribute('id');
+      preview.removeAttribute('autoplay');
+      preview.muted = true;
+      preview.autoplay = true;
+      preview.controls = false;
+      preview.setAttribute('data-blw-preview', '');
+      state.mirror = { preview, stream, style: state.video.getAttribute('style') };
+      state.video.replaceWith(preview);
+      marker.append(state.video);
+      state.video.style.cssText = `position:absolute;left:0;top:0;width:${rect.width}px;height:${rect.height}px;opacity:0;pointer-events:none;`;
+      marker.style.position = 'relative';
+      preview.srcObject = stream;
+    }
     root.setAttribute('data-blw-player', '');
     mount.append(root);
+    if (state.mirror) state.mirror.preview.play().catch(() => {
+      if (!state.restored) { restore(state); say('内嵌播放器画面未能接入小窗，已放回网页。'); }
+    });
     const scheduleStyleCopy = () => {
       clearTimeout(state.styleTimer);
       state.styleTimer = setTimeout(() => copyStyles(state), 150);
     };
     state.styleObserver = new MutationObserver(scheduleStyleCopy);
-    state.styleObserver.observe(document.head, { childList: true, subtree: true,
+    state.styleObserver.observe(sourceDocument.head, { childList: true, subtree: true,
       characterData: true, attributes: true, attributeFilter: ['href', 'media', 'disabled'] });
     state.bodyObserver = new MutationObserver(() => {
-      doc.body.className = document.body.className;
-      doc.documentElement.className = document.documentElement.className;
+      doc.body.className = sourceDocument.body.className;
+      doc.documentElement.className = sourceDocument.documentElement.className;
     });
-    state.bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    state.bodyObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    state.bodyObserver.observe(sourceDocument.body, { attributes: true, attributeFilter: ['class'] });
+    state.bodyObserver.observe(sourceDocument.documentElement, { attributes: true, attributeFilter: ['class'] });
     // Settings can change stylesheet CSSOM without a DOM mutation.
     for (const event of ['input', 'change', 'pointerup', 'keyup']) {
       doc.addEventListener(event, scheduleStyleCopy, true);
     }
-    pip.addEventListener('resize', () => window.dispatchEvent(new Event('resize')));
+    pip.addEventListener('resize', () => resizeSource(state));
     pip.addEventListener('pagehide', () => restore(state), { once: true });
-    state.onOwnerHide = () => restore(state);
+    state.onOwnerHide = () => { state.ownerGone = true; restore(state); };
     window.addEventListener('pagehide', state.onOwnerHide, { once: true });
+    if (sourceWindow !== window) sourceWindow.addEventListener('pagehide', state.onOwnerHide, { once: true });
     state.watchdog = setInterval(() => {
-      if (pip.closed || !marker.isConnected || location.pathname !== state.pathname) restore(state);
+      if (pip.closed || !marker.isConnected || !sourceAvailable(state)
+        || location.pathname !== state.pathname) restore(state);
     }, 750);
     refreshLayout(state);
     // Moving media to another Document can pause it. Only resume if already playing.
@@ -288,7 +377,7 @@
       say('当前浏览器不支持网页小窗。请更新 Edge；普通视频画中画无法保留弹幕和网页控件。');
       return;
     }
-    if (!/^\/\d+(?:\/|$)/.test(location.pathname)) {
+    if (!/^\/(?:blanc\/)?\d+(?:\/|$)/.test(location.pathname)) {
       say('请先进入一个直播间，再打开小窗。');
       return;
     }
@@ -309,6 +398,11 @@
       pip = await window.documentPictureInPicture.requestWindow({
         width: 800, height: 486, disallowReturnToOpener: false,
       });
+      if (!sourceAvailable(found) || !found.root.isConnected) {
+        pip.close();
+        say('直播页正在切换，请等播放器加载后重试。');
+        return;
+      }
       const state = { ...found, pip, parent: found.root.parentNode, next: found.root.nextSibling,
         marker: document.createElement('div'), pathname: location.pathname,
         previousAttribute: found.root.getAttribute('data-blw-player'),
